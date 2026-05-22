@@ -42,6 +42,13 @@ router.post('/webhook', authenticate, async (req, res, next) => {
     //    b) Malformed JSON (control chars) → sanitize then forward
     //    c) Raw text / form-data → wrap in a JSON envelope
     const contentType = req.headers['content-type'] || '';
+    const forwardHeaders = { ...req.headers };
+    
+    // Remove headers that should not be proxied (let Axios recalculate them)
+    delete forwardHeaders['host'];
+    delete forwardHeaders['content-length'];
+    delete forwardHeaders['transfer-encoding'];
+
     const payloadStr = typeof payload === 'string' ? payload : null;
     const isJsonLike =
       payloadStr !== null &&
@@ -54,40 +61,28 @@ router.post('/webhook', authenticate, async (req, res, next) => {
       const parsed = safeParseJson(payloadStr, requestId);
       if (parsed !== null) {
         payload = parsed;
+        forwardHeaders['content-type'] = 'application/json';
       } else {
-        // Could not parse even after sanitisation — wrap raw text in JSON envelope
-        logger.warn('JSON parsing failed. Wrapping raw text in JSON envelope.', { requestId });
-        payload = {
-          raw_message: payloadStr,
-          source: 'tasker',
-          parse_error: true,
-          received_at: receivedAt,
-        };
+        // Could not parse even after sanitisation — forward the original raw string as-is
+        logger.warn('JSON parsing failed. Forwarding raw JSON string as-is.', { requestId });
+        payload = payloadStr;
+        forwardHeaders['content-type'] = contentType || 'application/json';
       }
     } else if (typeof payload === 'string') {
-      // Plain text payload — wrap in JSON envelope
-      logger.info('Plain text payload received. Wrapping in JSON envelope.', { requestId });
-      payload = {
-        raw_message: payload,
-        source: 'tasker',
-        content_type: contentType || 'text/plain',
-        received_at: receivedAt,
-      };
-    } else if (typeof payload === 'object' && !Array.isArray(payload)) {
-      // URL-encoded form data or other parsed objects — already an object, keep as-is
-      // Add source metadata if not present
-      if (!payload.source) {
-        payload = { ...payload, source: 'tasker' };
+      // Plain text payload — forward original text string as-is, preserving content-type
+      logger.info('Forwarding plain text payload as-is.', { requestId, contentType });
+      forwardHeaders['content-type'] = contentType || 'text/plain';
+    } else if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
+      // URL-encoded form data or other parsed objects — keep as-is
+      if (contentType.includes('application/x-www-form-urlencoded')) {
+        // Serialize back to form urlencoded string so Axios forwards it correctly
+        payload = new URLSearchParams(payload).toString();
+        forwardHeaders['content-type'] = 'application/x-www-form-urlencoded';
+      } else {
+        // Other parsed objects
+        forwardHeaders['content-type'] = contentType || 'application/json';
       }
     }
-
-    // Ensure we always forward as JSON
-    const forwardHeaders = { ...req.headers };
-    forwardHeaders['content-type'] = 'application/json';
-    // Remove headers that should not be proxied
-    delete forwardHeaders['host'];
-    delete forwardHeaders['content-length'];
-    delete forwardHeaders['transfer-encoding'];
 
     // ── 3. Forward ───────────────────────────────────────────────────────
     logger.info('Payload accepted – forwarding to upstream', {
