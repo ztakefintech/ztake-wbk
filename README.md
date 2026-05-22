@@ -51,8 +51,8 @@ ztake-webhook-proxy/
 
 ```bash
 # 1. Clone
-git clone https://github.com/YOUR_USER/ztake-webhook-proxy.git
-cd ztake-webhook-proxy
+git clone https://github.com/ztakefintech/ztake-wbk.git
+cd ztake-wbk
 
 # 2. Install
 npm install
@@ -265,10 +265,8 @@ git init
 git add .
 git commit -m "feat: initial ztake-webhook-proxy"
 
-# Create GitHub repo and push
-gh repo create ztake-webhook-proxy --public --source=. --push
-# or manually:
-git remote add origin https://github.com/YOUR_USER/ztake-webhook-proxy.git
+# Push to GitHub
+git remote add origin https://github.com/ztakefintech/ztake-wbk.git
 git branch -M main
 git push -u origin main
 ```
