@@ -35,10 +35,12 @@ router.post('/webhook', authenticate, async (req, res, next) => {
       });
     }
 
-    // Clone headers to pass modified version to forwarder
-    const forwardHeaders = { ...req.headers };
 
-    // ── 2. Handle JSON parsing and sanitisation ──────────────────────────
+    // ── 2. Normalize payload to valid JSON for the Ztake backend ──────────
+    //    The upstream backend expects JSON. Tasker may send:
+    //    a) Valid JSON → forward as-is
+    //    b) Malformed JSON (control chars) → sanitize then forward
+    //    c) Raw text / form-data → wrap in a JSON envelope
     const contentType = req.headers['content-type'] || '';
     const payloadStr = typeof payload === 'string' ? payload : null;
     const isJsonLike =
@@ -48,18 +50,51 @@ router.post('/webhook', authenticate, async (req, res, next) => {
         payloadStr.trim().startsWith('['));
 
     if (isJsonLike) {
+      // Attempt to parse (with control-character sanitisation fallback)
       const parsed = safeParseJson(payloadStr, requestId);
       if (parsed !== null) {
         payload = parsed;
       } else {
-        // Could not parse even after sanitisation — relay as text/plain.
-        logger.warn('JSON parsing failed. Forwarding raw payload as text/plain.', { requestId });
-        forwardHeaders['content-type'] = 'text/plain';
+        // Could not parse even after sanitisation — wrap raw text in JSON envelope
+        logger.warn('JSON parsing failed. Wrapping raw text in JSON envelope.', { requestId });
+        payload = {
+          raw_message: payloadStr,
+          source: 'tasker',
+          parse_error: true,
+          received_at: receivedAt,
+        };
+      }
+    } else if (typeof payload === 'string') {
+      // Plain text payload — wrap in JSON envelope
+      logger.info('Plain text payload received. Wrapping in JSON envelope.', { requestId });
+      payload = {
+        raw_message: payload,
+        source: 'tasker',
+        content_type: contentType || 'text/plain',
+        received_at: receivedAt,
+      };
+    } else if (typeof payload === 'object' && !Array.isArray(payload)) {
+      // URL-encoded form data or other parsed objects — already an object, keep as-is
+      // Add source metadata if not present
+      if (!payload.source) {
+        payload = { ...payload, source: 'tasker' };
       }
     }
 
+    // Ensure we always forward as JSON
+    const forwardHeaders = { ...req.headers };
+    forwardHeaders['content-type'] = 'application/json';
+    // Remove headers that should not be proxied
+    delete forwardHeaders['host'];
+    delete forwardHeaders['content-length'];
+    delete forwardHeaders['transfer-encoding'];
+
     // ── 3. Forward ───────────────────────────────────────────────────────
-    logger.info('Payload accepted – forwarding to upstream', { requestId });
+    logger.info('Payload accepted – forwarding to upstream', {
+      requestId,
+      payloadType: typeof payload,
+      payloadKeys: typeof payload === 'object' ? Object.keys(payload) : 'string',
+    });
 
     const forwardResult = await forwardWebhook(payload, forwardHeaders, requestId);
 
