@@ -1,0 +1,29 @@
+{
+  "name": "ztake-webhook-proxy",
+  "version": "1.0.0",
+  "description": "Production-ready webhook proxy server for the Ztake platform. Receives, logs, validates, and forwards webhook payloads to the Ztake backend.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": [
+    "webhook",
+    "proxy",
+    "ztake",
+    "express",
+    "railway"
+  ],
+  "author": "Ztake",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "uuid": "^11.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
