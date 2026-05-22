@@ -22,6 +22,7 @@ const errorHandler = require('./middleware/errorHandler');
 // ── Routes ───────────────────────────────────────────────────────────────────
 const healthRoutes = require('./routes/health');
 const webhookRoutes = require('./routes/webhook');
+const testPageRoutes = require('./routes/testPage');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // App
@@ -47,6 +48,7 @@ app.use(requestLogger);
 // ── Routes ───────────────────────────────────────────────────────────────
 app.use(healthRoutes);
 app.use(webhookRoutes);
+app.use(testPageRoutes);
 
 // ── 404 catch-all ────────────────────────────────────────────────────────
 app.use((_req, res) => {

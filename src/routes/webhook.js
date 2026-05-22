@@ -1,11 +1,11 @@
 /**
- * Webhook route.
+ * Webhook routes.
  *
- *   POST /webhook
+ *   POST /webhook        → Receive, validate, sanitize, and forward to Ztake backend.
+ *   POST /webhook/debug  → Echo back exactly what was received (for Tasker debugging).
+ *   GET  /webhook/test   → Quick reachability check from Tasker or browser.
  *
- * Accepts JSON, plain-text, and URL-encoded bodies.
- * Validates the payload, logs it, forwards it to the Ztake backend,
- * and returns a structured success/error response.
+ * Accepts JSON, plain-text, URL-encoded, and raw binary bodies.
  */
 
 const { Router } = require('express');
@@ -23,10 +23,10 @@ router.post('/webhook', authenticate, async (req, res, next) => {
   const receivedAt = new Date().toISOString();
 
   try {
-    // ── 1. Validate that we have *something* to forward ──────────────────
-    let payload = req.body;
+    // ── 1. Normalize payload ─────────────────────────────────────────────
+    let payload = normalizePayload(req);
 
-    if (payload === undefined || payload === null || isEmptyPayload(payload)) {
+    if (payload === null || isEmptyPayload(payload)) {
       logger.warn('Empty or missing payload', { requestId });
       return res.status(400).json({
         success: false,
@@ -40,18 +40,19 @@ router.post('/webhook', authenticate, async (req, res, next) => {
 
     // ── 2. Handle JSON parsing and sanitisation ──────────────────────────
     const contentType = req.headers['content-type'] || '';
+    const payloadStr = typeof payload === 'string' ? payload : null;
     const isJsonLike =
-      typeof payload === 'string' &&
+      payloadStr !== null &&
       (contentType.includes('application/json') ||
-        payload.trim().startsWith('{') ||
-        payload.trim().startsWith('['));
+        payloadStr.trim().startsWith('{') ||
+        payloadStr.trim().startsWith('['));
 
     if (isJsonLike) {
-      const parsed = safeParseJson(payload, requestId);
+      const parsed = safeParseJson(payloadStr, requestId);
       if (parsed !== null) {
         payload = parsed;
       } else {
-        // Parsing failed completely. Relay as text/plain to prevent upstream from crashing.
+        // Could not parse even after sanitisation — relay as text/plain.
         logger.warn('JSON parsing failed. Forwarding raw payload as text/plain.', { requestId });
         forwardHeaders['content-type'] = 'text/plain';
       }
@@ -62,7 +63,7 @@ router.post('/webhook', authenticate, async (req, res, next) => {
 
     const forwardResult = await forwardWebhook(payload, forwardHeaders, requestId);
 
-    // ── 3. Respond ───────────────────────────────────────────────────────
+    // ── 4. Respond ───────────────────────────────────────────────────────
     const isUpstreamSuccess =
       forwardResult.status >= 200 && forwardResult.status < 300;
 
@@ -103,13 +104,96 @@ router.post('/webhook', authenticate, async (req, res, next) => {
   }
 });
 
+// ─── POST /webhook/debug ─────────────────────────────────────────────────────
+// Echo endpoint – returns exactly what the server received.
+// Use this from Tasker to verify payloads are arriving correctly.
+
+router.post('/webhook/debug', (req, res) => {
+  const payload = normalizePayload(req);
+  const requestId = req.id;
+
+  logger.info('Debug echo request', {
+    requestId,
+    contentType: req.headers['content-type'] || 'none',
+    bodyType: typeof payload,
+    bodyLength: typeof payload === 'string' ? payload.length : JSON.stringify(payload || '').length,
+  });
+
+  return res.status(200).json({
+    success: true,
+    echo: true,
+    requestId,
+    timestamp: new Date().toISOString(),
+    received: {
+      method: req.method,
+      contentType: req.headers['content-type'] || 'none',
+      userAgent: req.headers['user-agent'] || 'none',
+      ip: req.ip || req.socket.remoteAddress,
+      bodyType: typeof payload,
+      bodyIsBuffer: Buffer.isBuffer(req.body),
+      bodyIsEmpty: isEmptyPayload(payload),
+      body: payload,
+    },
+    headers: req.headers,
+  });
+});
+
+// ─── GET /webhook/debug ──────────────────────────────────────────────────────
+// Also accept GET for easy browser / Tasker GET-mode testing.
+
+router.get('/webhook/debug', (req, res) => {
+  return res.status(200).json({
+    success: true,
+    echo: true,
+    message: 'Debug endpoint is reachable. Send a POST to /webhook/debug to echo your payload.',
+    timestamp: new Date().toISOString(),
+    ip: req.ip || req.socket.remoteAddress,
+    query: req.query,
+    headers: req.headers,
+  });
+});
+
+// ─── GET /webhook/test ───────────────────────────────────────────────────────
+// Quick reachability check that Tasker can hit with a simple GET.
+
+router.get('/webhook/test', (_req, res) => {
+  return res.status(200).json({
+    success: true,
+    message: 'Webhook endpoint is reachable.',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize the request body into a usable format.
+ * - Buffers (from express.raw) → converted to UTF-8 string.
+ * - Strings → returned as-is.
+ * - Objects (from express.urlencoded) → returned as-is.
+ * - Undefined / null → returned as null.
+ */
+function normalizePayload(req) {
+  const body = req.body;
+
+  if (body === undefined || body === null) return null;
+
+  // express.raw() produces a Buffer — convert to string
+  if (Buffer.isBuffer(body)) {
+    const str = body.toString('utf-8').trim();
+    return str.length > 0 ? str : null;
+  }
+
+  return body;
+}
 
 /**
  * Check whether a parsed body is "empty".
  */
 function isEmptyPayload(body) {
+  if (body === null || body === undefined) return true;
   if (typeof body === 'string') return body.trim().length === 0;
+  if (Buffer.isBuffer(body)) return body.length === 0;
   if (typeof body === 'object') return Object.keys(body).length === 0;
   return false;
 }
