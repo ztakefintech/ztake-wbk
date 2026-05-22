@@ -34,8 +34,8 @@ app.set('trust proxy', true);
 
 // ── Global middleware (order matters) ─────────────────────────────────────
 app.use(cors());
-app.use(express.json({ limit: '5mb' }));
-app.use(express.text({ limit: '5mb' }));
+// Parse JSON and text as raw string so we can sanitize invalid control characters customly
+app.use(express.text({ type: ['application/json', 'text/*'], limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use(express.raw({ type: '*/*', limit: '5mb' }));
 

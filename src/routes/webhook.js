@@ -12,6 +12,7 @@ const { Router } = require('express');
 const { forwardWebhook } = require('../utils/forwarder');
 const authenticate = require('../middleware/authenticate');
 const logger = require('../utils/logger');
+const { safeParseJson } = require('../utils/jsonParser');
 
 const router = Router();
 
@@ -23,7 +24,7 @@ router.post('/webhook', authenticate, async (req, res, next) => {
 
   try {
     // ── 1. Validate that we have *something* to forward ──────────────────
-    const payload = req.body;
+    let payload = req.body;
 
     if (payload === undefined || payload === null || isEmptyPayload(payload)) {
       logger.warn('Empty or missing payload', { requestId });
@@ -34,10 +35,32 @@ router.post('/webhook', authenticate, async (req, res, next) => {
       });
     }
 
-    // ── 2. Forward ───────────────────────────────────────────────────────
+    // Clone headers to pass modified version to forwarder
+    const forwardHeaders = { ...req.headers };
+
+    // ── 2. Handle JSON parsing and sanitisation ──────────────────────────
+    const contentType = req.headers['content-type'] || '';
+    const isJsonLike =
+      typeof payload === 'string' &&
+      (contentType.includes('application/json') ||
+        payload.trim().startsWith('{') ||
+        payload.trim().startsWith('['));
+
+    if (isJsonLike) {
+      const parsed = safeParseJson(payload, requestId);
+      if (parsed !== null) {
+        payload = parsed;
+      } else {
+        // Parsing failed completely. Relay as text/plain to prevent upstream from crashing.
+        logger.warn('JSON parsing failed. Forwarding raw payload as text/plain.', { requestId });
+        forwardHeaders['content-type'] = 'text/plain';
+      }
+    }
+
+    // ── 3. Forward ───────────────────────────────────────────────────────
     logger.info('Payload accepted – forwarding to upstream', { requestId });
 
-    const forwardResult = await forwardWebhook(payload, req.headers, requestId);
+    const forwardResult = await forwardWebhook(payload, forwardHeaders, requestId);
 
     // ── 3. Respond ───────────────────────────────────────────────────────
     const isUpstreamSuccess =
